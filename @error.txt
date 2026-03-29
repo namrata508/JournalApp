@@ -1,0 +1,54 @@
+======================================================
+API Issues Found in /journal (JournalEntryControllerV2)
+======================================================
+
+1.  SECURITY VULNERABILITY: Unrestricted GET Access to Any Journal Entry
+    - Problem: In `getJournalEntryById(@PathVariable ObjectId myId)`, the application fetches the entry solely by its ID. It does not verify if the currently authenticated user actually owns this journal entry. Consequently, any authenticated user can view another user's journal entry if they know or guess the ObjectId.
+    - Solution: Retrieve the authenticated user's username using `SecurityContextHolder`. Fetch the user from the database and check if the requested `myId` exists within their specific list of journal entries before returning the resource.
+
+2.  SECURITY VULNERABILITY: Insecure DELETE Implementation
+    - Problem: `deleteJournalEntryById(@PathVariable ObjectId myId, @PathVariable String userName)` accepts `userName` as a URL path variable. Because the endpoint relies on the client-provided username rather than the authenticated session, an attacker logged into their own account could maliciously pass another user's username (`DELETE /journal/id/victimUser/1234`) to delete the victim's journal entries.
+    - Solution: Remove `@PathVariable String userName` from the URL and method signature. Instead, securely extract the `userName` directly from `SecurityContextHolder.getContext().getAuthentication().getName()` inside the method body, ensuring a user can only delete their own entries.
+
+3.  SECURITY VULNERABILITY: Insecure PUT (Update) Implementation
+    - Problem: `updateJournalEntryById` takes `userName` as a path variable but completely ignores it in the method body. It directly fetches the entry by `myId`, applies the modifications, and saves it without checking the owner. Any authenticated user can overwrite any other user's journal entry just by providing its ID.
+    - Solution: Remove the `userName` path variable. Just like the DELETE method, retrieve the authenticated username securely from the `SecurityContextHolder`. Verify the journal entry belongs to the logged-in user before persisting the updates.
+
+4.  DESIGN FLAW: Non-RESTful URL Paths and Redundant Variables
+    - Problem: The endpoints map to `/journal/id/{myId}` and `/journal/id/{userName}/{myId}`. Adding "/id/" makes the URI non-idiomatic. Furthermore, providing `userName` in the path is completely redundant for a secure API where identifying the client is resolved through JWT, Session, or Basic Auth.
+    - Solution: Refactor the mapping to align with standard RESTful conventions:
+        - `@GetMapping("/{myId}")`
+        - `@DeleteMapping("/{myId}")`
+        - `@PutMapping("/{myId}")`
+
+======================================================
+Expected Behaviour for /journal API
+======================================================
+
+1. GET /journal
+   - Client sends authenticated request.
+   - Server returns HTTP 200 OK with a list of ALL journal entries belonging strictly to the currently authenticated user.
+   - If the user has no entries, returns HTTP 404 NOT FOUND (based on current implementation) or an empty list `[]`.
+
+2. POST /journal
+   - Client sends authenticated request containing a JSON body of a new journal entry (`title`, `content`).
+   - Server identifies the user, creates the entry, securely links it to the user's `@DBRef` list, and persists it.
+   - Server returns HTTP 201 CREATED along with the saved entry object.
+
+3. GET /journal/{id}
+   - Client sends authenticated request to read a specific entry by its `id`.
+   - Server checks if the entry exists AND validates that the logged-in user is the sole owner.
+   - Returns HTTP 200 OK with the entry if successful.
+   - Returns HTTP 404 NOT FOUND (or HTTP 403 FORBIDDEN) if the entry doesn't exist or belongs to someone else.
+
+4. PUT /journal/{id}
+   - Client sends authenticated request with updated JSON data for a specific entry.
+   - Server checks if the entry exists AND is owned by the currently authenticated user.
+   - If authorized, applies the updates (e.g., `title`, `content`), saves to the DB, and returns HTTP 200 OK.
+   - If unauthorized or not found, returns HTTP 404 NOT FOUND.
+
+5. DELETE /journal/{id}
+   - Client sends authenticated request to delete a specific entry by `id`.
+   - Server enforces strict authorization: it only removes the entry if it is authored by the currently logged-in user.
+   - Returns HTTP 204 NO CONTENT upon successful deletion.
+   - Returns HTTP 404 NOT FOUND if unauthorized or doesn't exist.
